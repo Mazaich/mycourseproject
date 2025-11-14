@@ -1,0 +1,30 @@
+[web_servers]
+web-server-1 ansible_host=192.168.20.10 ansible_user=ubuntu
+web-server-2 ansible_host=192.168.20.11 ansible_user=ubuntu
+
+[monitoring]
+prometheus-vm ansible_host=192.168.20.20 ansible_user=ubuntu
+grafana-vm ansible_host=192.168.20.21 ansible_user=ubuntu
+
+[logging]
+elasticsearch-vm ansible_host=192.168.20.30 ansible_user=ubuntu
+kibana-vm ansible_host=192.168.20.31 ansible_user=ubuntu
+
+[bastion]
+bastion-host ansible_host=192.168.10.10 ansible_user=ubuntu
+
+[all:vars]
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+
+
+#Как получить IP-адреса:
+
+#bash
+# После terraform apply смотрим outputs
+#cd terraform   
+#terraform output
+
+# Или через YC CLI
+#yc compute instance list
+
