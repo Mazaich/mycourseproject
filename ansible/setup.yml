@@ -1,0 +1,223 @@
+---
+# 1. Базовые настройки для всех серверов
+- name: Базовая настройка всех серверов
+  hosts: all
+  become: yes
+  tasks:
+    - name: Обновление пакетов
+      apt:
+        update_cache: yes
+
+    - name: Установка необходимых пакетов
+      apt:
+        name:
+          - curl
+          - wget
+          - net-tools
+        state: present
+
+# 2. Настройка веб-серверов (nginx, мониторинг, логи)
+- name: Настройка веб-серверов
+  hosts: web_servers
+  become: yes
+  tasks:
+    - name: Установка nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Запуск nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Создание тестовой страницы
+      copy:
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head><title>Дипломный проект</title></head>
+          <body>
+            <h1>Сервер: {{ inventory_hostname }}</h1>
+            <p>Работает корректно</p>
+          </body>
+          </html>
+        dest: /var/www/html/index.html
+
+    # Node Exporter для мониторинга
+    - name: Скачивание Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.6.0/node_exporter-1.6.0.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Распаковка Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Создание сервиса Node Exporter
+      copy:
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/node_exporter-1.6.0.linux-amd64/node_exporter
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/node_exporter.service
+
+    - name: Запуск Node Exporter
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+
+    # Filebeat для логов
+    - name: Установка Filebeat
+      apt:
+        name: filebeat
+        state: present
+
+    - name: Настройка Filebeat
+      copy:
+        content: |
+          filebeat.inputs:
+          - type: log
+            paths:
+              - /var/log/nginx/access.log
+          - type: log
+            paths:
+              - /var/log/nginx/error.log
+
+          output.elasticsearch:
+            hosts: ["<ELASTICSEARCH_PRIVATE_IP>:9200"]
+        dest: /etc/filebeat/filebeat.yml
+
+    - name: Запуск Filebeat
+      systemd:
+        name: filebeat
+        state: started
+        enabled: yes
+
+# 3. Настройка Prometheus
+- name: Настройка Prometheus
+  hosts: prometheus
+  become: yes
+  tasks:
+    - name: Скачивание Prometheus
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Распаковка Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Создание конфига Prometheus
+      copy:
+        content: |
+          global:
+            scrape_interval: 15s
+
+          scrape_configs:
+            - job_name: 'node'
+              static_configs:
+                - targets: ['<WEB1_PRIVATE_IP>:9100', '<WEB2_PRIVATE_IP>:9100']
+        dest: /opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+
+    - name: Создание сервиса Prometheus
+      copy:
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/opt/prometheus-2.47.0.linux-amd64/prometheus --config.file=/opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/prometheus.service
+
+    - name: Запуск Prometheus
+      systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+# 4. Настройка Grafana
+- name: Настройка Grafana
+  hosts: grafana
+  become: yes
+  tasks:
+    - name: Установка Grafana
+      apt:
+        name: grafana
+        state: present
+
+    - name: Запуск Grafana
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+
+    - name: Ожидание запуска Grafana
+      wait_for:
+        port: 3000
+        timeout: 60
+
+# 5. Настройка Elasticsearch (через Docker - как рекомендовано)
+- name: Настройка Elasticsearch
+  hosts: elasticsearch
+  become: yes
+  tasks:
+    - name: Установка Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Запуск Elasticsearch в Docker
+      docker_container:
+        name: elasticsearch
+        image: elasticsearch:7.17.0
+        state: started
+        restart_policy: always
+        ports:
+          - "9200:9200"
+        env:
+          discovery.type: "single-node"
+
+# 6. Настройка Kibana (через Docker)
+- name: Настройка Kibana
+  hosts: kibana
+  become: yes
+  tasks:
+    - name: Установка Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Запуск Kibana в Docker
+      docker_container:
+        name: kibana
+        image: kibana:7.17.0
+        state: started
+        restart_policy: always
+        ports:
+          - "5601:5601"
+        env:
+          ELASTICSEARCH_HOSTS: "http://<ELASTICSEARCH_PRIVATE_IP>:9200"
