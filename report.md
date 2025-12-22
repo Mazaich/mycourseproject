@@ -43,7 +43,7 @@ curl -v http://158.160.198.162:80
 ![Скриншот работы графана](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/Screenshot_2025-12-21_06_52_45.png?raw=true)
 3. Логи (Elasticsearch/Kibana)
 
-Ссылка на сайт: http://130.193.40.133:5601/app/management/kibana/indexPatterns/patterns/3924edc0-dda1-11f0-ac72-7d8c23a4d11c#/?_a=(tab:indexedFields)
+Ссылка на сайт: 178.154.194.231:5601
 ![Скриншот Проверка индексов в Elasticsearch через Bastion](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/Screenshot_2025-12-21_02_33_35.png?raw=true)
 ![Скриншот работы Веб-интерфейса Kibana](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/Screenshot_2025-12-21_02_35_19.png?raw=true)
 ![Скриншот работы Discover с выбранным filebeat-* индексом и логами nginx](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/Screenshot_2025-12-21_02_35_37.png?raw=true)
