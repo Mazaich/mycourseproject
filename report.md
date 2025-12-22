@@ -32,7 +32,7 @@ curl -v http://158.160.198.162:80
 
 2.Мониторинг (Prometheus/Grafana) 
 
-Ссылка на сайт: http://89.169.191.199:3000 
+Ссылка на сайт: http://158.160.84.49:3000/?orgId=1 
 
 ![Скриншот работы прометеус](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/Screenshot_2025-12-20_18_36_11.png?raw=true)
 ![Скриншот работы прометеус](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/Screenshot_2025-12-20_18_24_55.png?raw=true)
