@@ -18,18 +18,51 @@
 - name: Настройка веб-серверов
   hosts: web_servers
   become: yes
+  
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+    
+    - name: check nginx config
+      command: nginx -t
+      register: nginx_check
+      changed_when: false
+    
+    - name: restart node_exporter
+      systemd:
+        name: node_exporter
+        state: restarted
+    
+    - name: restart filebeat container
+      docker_container:
+        name: filebeat
+        state: restarted
+  
   tasks:
     - name: Установка nginx
       apt:
         name: nginx
         state: present
-
+    
+    - name: Проверка конфигурации nginx
+      command: nginx -t
+      register: nginx_test
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Показываем результат проверки
+      debug:
+        msg: "Nginx config test: {{ nginx_test.stdout }}"
+      when: nginx_test is defined
+    
     - name: Запуск nginx
       systemd:
         name: nginx
         state: started
         enabled: yes
-
+    
     - name: Создание тестовой страницы
       copy:
         content: |
@@ -42,6 +75,7 @@
           </body>
           </html>
         dest: /var/www/html/index.html
+      notify: check nginx config
 
     - name: Скачивание Node Exporter
       get_url:
@@ -68,6 +102,7 @@
           [Install]
           WantedBy=multi-user.target
         dest: /etc/systemd/system/node_exporter.service
+      notify: restart node_exporter
 
     - name: Запуск Node Exporter
       systemd:
@@ -75,11 +110,17 @@
         state: started
         enabled: yes
 
-# Filebeat через Docker
-    - name: Установка Docker
+    - name: Проверяем установлен ли Docker
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Если Docker не установлен - устанавливаем
       apt:
         name: docker.io
         state: present
+      when: docker_check.rc != 0
 
     - name: Создание конфига Filebeat
       copy:
@@ -100,8 +141,15 @@
           output.elasticsearch:
             hosts: ["192.168.30.11:9200"]
         dest: /etc/filebeat.yml
+      notify: restart filebeat container
 
-    - name: Запуск Filebeat в Docker
+    - name: Проверяем запущен ли Filebeat
+      docker_container_info:
+        name: filebeat
+      register: filebeat_status
+      ignore_errors: yes
+
+    - name: Запускаем Filebeat если не запущен
       docker_container:
         name: filebeat
         image: docker.elastic.co/beats/filebeat:7.17.0
@@ -111,10 +159,18 @@
           - "/var/log/nginx:/var/log/nginx:ro"
           - "/etc/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
           - "filebeat-data:/usr/share/filebeat/data"
+      when: filebeat_status.container is not defined
 
 - name: Настройка Prometheus
   hosts: prometheus
   become: yes
+  
+  handlers:
+    - name: restart prometheus
+      systemd:
+        name: prometheus
+        state: restarted
+  
   tasks:
     - name: Скачивание Prometheus
       get_url:
@@ -138,6 +194,7 @@
               static_configs:
                 - targets: ['192.168.30.23:9100', '192.168.40.11:9100']
         dest: /opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+      notify: restart prometheus
 
     - name: Создание сервиса Prometheus
       copy:
@@ -154,6 +211,7 @@
           [Install]
           WantedBy=multi-user.target
         dest: /etc/systemd/system/prometheus.service
+      notify: restart prometheus
 
     - name: Запуск Prometheus
       systemd:
@@ -164,12 +222,29 @@
 - name: Настройка Grafana
   hosts: grafana
   become: yes
+  
+  vars_files:
+    - grafana_vault.yml
+  
+  handlers:
+    - name: restart grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+  
   tasks:
     - name: Установка Grafana
       apt:
         name: grafana
         state: present
-
+    
+    - name: Устанавливаем пароль из vault
+      replace:
+        path: /etc/grafana/grafana.ini
+        regexp: '^;admin_password = admin'
+        replace: 'admin_password = {{ grafana_password }}'
+      notify: restart grafana
+    
     - name: Запуск Grafana
       systemd:
         name: grafana-server
@@ -181,10 +256,16 @@
         port: 3000
         timeout: 60
 
-# Настройка Elasticsearch (через Docker - как рекомендовано)
 - name: Настройка Elasticsearch
   hosts: elasticsearch
   become: yes
+  
+  handlers:
+    - name: restart elasticsearch container
+      docker_container:
+        name: elasticsearch
+        state: restarted
+  
   tasks:
     - name: Установка Docker
       apt:
@@ -192,6 +273,12 @@
           - docker.io
           - docker-compose
         state: present
+
+    - name: Проверяем запущен ли Elasticsearch
+      docker_container_info:
+        name: elasticsearch
+      register: elasticsearch_status
+      ignore_errors: yes
 
     - name: Запуск Elasticsearch в Docker
       docker_container:
@@ -203,11 +290,19 @@
           - "9200:9200"
         env:
           discovery.type: "single-node"
+      when: elasticsearch_status.container is not defined
+      notify: restart elasticsearch container
 
-#Настройка Kibana (через Docker)
 - name: Настройка Kibana
   hosts: kibana
   become: yes
+  
+  handlers:
+    - name: restart kibana container
+      docker_container:
+        name: kibana
+        state: restarted
+  
   tasks:
     - name: Установка Docker
       apt:
@@ -215,6 +310,12 @@
           - docker.io
           - docker-compose
         state: present
+
+    - name: Проверяем запущен ли Kibana
+      docker_container_info:
+        name: kibana
+      register: kibana_status
+      ignore_errors: yes
 
     - name: Запуск Kibana в Docker
       docker_container:
@@ -226,3 +327,5 @@
           - "5601:5601"
         env:
           ELASTICSEARCH_HOSTS: "http://192.168.30.11:9200"
+      when: kibana_status.container is not defined
+      notify: restart kibana container

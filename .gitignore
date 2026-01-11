@@ -1,10 +1,13 @@
-# Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
 terraform.tfvars
 terraform.tfvars.json
-
-# Исключения (шаблоны без секретов)
-!terraform.tfvars.example
+*.tfplan
+id_rsa_diploma
+id_rsa_diploma*
+vault_pass.txt
+grafana_vault.yml
+.env
+*.env.local

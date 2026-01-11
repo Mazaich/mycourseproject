@@ -74,3 +74,71 @@ ssh -J ubuntu@158.160.97.89 ubuntu@192.168.30.23 "hostname"
 
 ![Скриншот списока снапшотов дисков всех виртуальных машин в разделе Compute → Snapshots](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/2025-12-21_03-43-35.png?raw=true)
 ![Скриншот политики снапшотов daily-vm-backup с указанием ежедневного расписания и срока хранения 7 дней](https://github.com/Mazaich/mycourseproject/blob/main/screenshots/2025-12-21_03-44-11.png?raw=true)
+
+
+
+Улучшения по рекомендациям:
+
+ Terraform:
+- Убраны секретные файлы из репозитория (добавлены в .gitignore)
+- Добавлена возможность использовать переменные через окружение (`TF_VAR_` в ~/.bashrc)
+- Сохранена обратная совместимость - можно использовать как terraform.tfvars, так и переменные окружения
+
+ Ansible - Инвентарь (hosts.yml):
+- Вынесены общие переменные  в `all.vars`
+- Добавлены логические группы: `webservers`, `monitoring`, `logging`, `private_servers`, `public_servers`
+- Сохранены старые группы для совместимости со старым setup.yml, чуть упрощена конфигурация SSH - убраны дублирующиеся параметры
+
+Ansible - Плейбук (setup.yml):
+- Добавлены handlers для всех сервисов:
+  - nginx: `check nginx config` (проверка конфигурации) и `restart nginx`
+  - node_exporter: `restart node_exporter`
+  - filebeat: `restart filebeat container`
+  - prometheus: `restart prometheus`
+  - grafana: `restart grafana`
+  - elasticsearch: `restart elasticsearch container`
+  - kibana: `restart kibana container`
+
+- Добавлены notify для автоматического перезапуска при изменении конфигурации
+- Проверка конфигурации nginx (`nginx -t`) перед применением изменений
+- Безопасное хранение пароля Grafana через ansible-vault
+- Улучшена идемпотентность - проверки перед установкой/запуском
+- Автоматический перезапуск сервисов при изменении их конфигурационных файлов
+
+- Пароль Grafana вынесен в зашифрованный файл `grafana_vault.yml`
+- Переменные Terraform можно задавать через окружение, не храня в репозитории
+
+
+Файлы с измененмяи  изменены:
+- `report.md` - добавлено описание улучшений и изменений
+- `.gitignore` - добавлены секретные файлы
+- `hosts.yml` - изменена структура инвентаря
+- `setup.yml` - добавлены handlers и проверки
+- `grafana_vault.yml` - зашифрованный файл с паролем
+- `vault_pass.txt` - файл с паролем для vault
+
+
+Настройка переменных Terraform в ~/.bashrc
+export TF_VAR_yc_token="ваш_токен"
+export TF_VAR_yc_cloud_id="ваш_cloud_id"
+export TF_VAR_yc_folder_id="ваш_folder_id"
+
+
+
+Настройка паролей (требуется перед запуском, пример):
+
+1. Создаем файл с паролем для ansible-vault:
+echo "admin" > vault_pass.txt
+
+2. Создаем файл с паролем Grafana (незашифрованный):
+cat > grafana_vault.yml << 'EOF'
+grafana_password: "admin"
+EOF
+
+3. Зашифруем файл grafana_vault.yml с помощью ansible-vault:
+ansible-vault encrypt grafana_vault.yml --vault-password-file vault_pass.txt
+
+4.  Запуститим плейбук, указав файл с паролем vault:
+ansible-playbook -i hosts.yml setup.yml --vault-password-file vault_pass.txt
+
+
