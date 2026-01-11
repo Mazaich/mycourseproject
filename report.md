@@ -119,9 +119,9 @@ Ansible - Плейбук (setup.yml):
 
 
 Настройка переменных Terraform в ~/.bashrc
-export TF_VAR_yc_token="ваш_токен"
-export TF_VAR_yc_cloud_id="ваш_cloud_id"
-export TF_VAR_yc_folder_id="ваш_folder_id"
+export TF_VAR_yc_token="мой_токен"
+export TF_VAR_yc_cloud_id="мой_cloud_id"
+export TF_VAR_yc_folder_id="мой_folder_id"
 
 
 
