@@ -1,0 +1,739 @@
+---
+- name: Базовая настройка всех серверов
+  hosts: all
+  become: yes
+  tasks:
+    - name: Обновление пакетов
+      apt:
+        update_cache: yes
+
+    - name: Установка необходимых пакетов
+      apt:
+        name:
+          - curl
+          - wget
+          - net-tools
+        state: present
+
+- name: Настройка веб-серверов
+  hosts: web_servers
+  become: yes
+  
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+    
+    - name: restart node_exporter
+      systemd:
+        name: node_exporter
+        state: restarted---
+- name: Базовая настройка всех серверов
+  hosts: all
+  become: yes
+  tasks:
+    - name: Обновление пакетов
+      apt:
+        update_cache: yes
+
+    - name: Установка необходимых пакетов
+      apt:
+        name:
+          - curl
+          - wget
+          - net-tools
+        state: present
+
+- name: Настройка веб-серверов
+  hosts: web_servers
+  become: yes
+  
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+    
+    - name: restart node_exporter
+      systemd:
+        name: node_exporter
+        state: restarted
+    
+    - name: restart filebeat container
+      docker_container:
+        name: filebeat
+        state: restarted
+  
+  tasks:
+    - name: Установка nginx
+      apt:
+        name: nginx
+        state: present
+    
+    - name: Создание конфига nginx
+      copy:
+        content: |
+          events {
+              worker_connections 1024;
+          }
+          
+          http {
+              include /etc/nginx/mime.types;
+              
+              server {
+                  listen 80;
+                  server_name _;
+                  root /var/www/html;
+                  index index.html;
+                  
+                  location / {
+                      try_files $uri $uri/ =404;
+                  }
+              }
+          }
+        dest: /etc/nginx/nginx.conf
+        mode: '0644'
+      notify: restart nginx
+    
+    - name: Создание тестовой страницы
+      copy:
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head><title>Курсовой проект</title></head>
+          <body>
+            <h1>Сервер: {{ inventory_hostname }}</h1>
+            <p>Работает корректно</p>
+          </body>
+          </html>
+        dest: /var/www/html/index.html
+        mode: '0644'
+    
+    - name: Запуск nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Скачивание Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.6.0/node_exporter-1.6.0.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Распаковка Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Создание сервиса Node Exporter
+      copy:
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/node_exporter-1.6.0.linux-amd64/node_exporter
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/node_exporter.service
+        mode: '0644'
+      notify: restart node_exporter
+
+    - name: Запуск Node Exporter
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+
+    - name: Проверяем установлен ли Docker
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Если Docker не установлен - устанавливаем
+      apt:
+        name: docker.io
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Создание конфига Filebeat
+      copy:
+        content: |
+          filebeat.inputs:
+          - type: log
+            paths:
+              - /var/log/nginx/access.log
+            fields:
+              service: nginx
+          - type: log
+            paths:
+              - /var/log/nginx/error.log
+            fields:
+              service: nginx
+              level: error
+
+          output.elasticsearch:
+            hosts: ["192.168.30.11:9200"]
+        dest: /etc/filebeat.yml
+        mode: '0644'
+      notify: restart filebeat container
+
+    - name: Проверяем запущен ли Filebeat
+      docker_container_info:
+        name: filebeat
+      register: filebeat_status
+      ignore_errors: yes
+
+    - name: Запускаем Filebeat если не запущен
+      docker_container:
+        name: filebeat
+        image: docker.elastic.co/beats/filebeat:7.17.0
+        state: started
+        restart_policy: always
+        volumes:
+          - "/var/log/nginx:/var/log/nginx:ro"
+          - "/etc/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
+          - "filebeat-data:/usr/share/filebeat/data"
+      when: filebeat_status.container is not defined
+
+- name: Настройка Prometheus
+  hosts: prometheus
+  become: yes
+  
+  handlers:
+    - name: restart prometheus
+      systemd:
+        name: prometheus
+        state: restarted
+  
+  tasks:
+    - name: Скачивание Prometheus
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Распаковка Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Создание конфига Prometheus
+      copy:
+        content: |
+          global:
+            scrape_interval: 15s
+
+          scrape_configs:
+            - job_name: 'node'
+              static_configs:
+                - targets: ['192.168.30.23:9100', '192.168.40.11:9100']
+        dest: /opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+        mode: '0644'
+      notify: restart prometheus
+
+    - name: Создание сервиса Prometheus
+      copy:
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/opt/prometheus-2.47.0.linux-amd64/prometheus --config.file=/opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/prometheus.service
+        mode: '0644'
+      notify: restart prometheus
+
+    - name: Запуск Prometheus
+      systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+- name: Настройка Grafana
+  hosts: grafana
+  become: yes
+  
+  vars_files:
+    - grafana_vault.yml
+  
+  handlers:
+    - name: restart grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+  
+  tasks:
+    - name: Установка Grafana
+      apt:
+        name: grafana
+        state: present
+    
+    - name: Устанавливаем пароль из vault
+      replace:
+        path: /etc/grafana/grafana.ini
+        regexp: '^;admin_password = admin'
+        replace: 'admin_password = {{ grafana_password }}'
+      notify: restart grafana
+    
+    - name: Запуск Grafana
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+
+    - name: Ожидание запуска Grafana
+      wait_for:
+        port: 3000
+        timeout: 60
+
+- name: Настройка Elasticsearch
+  hosts: elasticsearch
+  become: yes
+  
+  handlers:
+    - name: restart elasticsearch container
+      docker_container:
+        name: elasticsearch
+        state: restarted
+  
+  tasks:
+    - name: Установка Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Создание конфига Elasticsearch
+      copy:
+        content: |
+          cluster.name: "mycourseproject-cluster"
+          node.name: "elasticsearch-node-1"
+          network.host: 0.0.0.0
+          http.port: 9200
+          discovery.type: single-node
+          xpack.security.enabled: false
+        dest: /etc/elasticsearch/elasticsearch.yml
+        mode: '0644'
+      notify: restart elasticsearch container
+
+    - name: Проверяем запущен ли Elasticsearch
+      docker_container_info:
+        name: elasticsearch
+      register: elasticsearch_status
+      ignore_errors: yes
+
+    - name: Запуск Elasticsearch в Docker
+      docker_container:
+        name: elasticsearch
+        image: elasticsearch:7.17.0
+        state: started
+        restart_policy: always
+        ports:
+          - "9200:9200"
+        volumes:
+          - "/etc/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro"
+        environment:
+          discovery.type: "single-node"
+      when: elasticsearch_status.container is not defined
+
+- name: Настройка Kibana
+  hosts: kibana
+  become: yes
+  
+  handlers:
+    - name: restart kibana container
+      docker_container:
+        name: kibana
+        state: restarted
+  
+  tasks:
+    - name: Установка Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Создание конфига Kibana
+      copy:
+        content: |
+          server.name: kibana
+          server.host: "0.0.0.0"
+          server.port: 5601
+          elasticsearch.hosts: ["http://192.168.30.11:9200"]
+          elasticsearch.requestTimeout: 90000
+          xpack.security.enabled: false
+        dest: /etc/kibana/kibana.yml
+        mode: '0644'
+      notify: restart kibana container
+
+    - name: Проверяем запущен ли Kibana
+      docker_container_info:
+        name: kibana
+      register: kibana_status
+      ignore_errors: yes
+
+    - name: Запуск Kibana в Docker
+      docker_container:
+        name: kibana
+        image: kibana:7.17.0
+        state: started
+        restart_policy: always
+        ports:
+          - "5601:5601"
+        volumes:
+          - "/etc/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro"
+      when: kibana_status.container is not defined
+    
+    - name: restart filebeat container
+      docker_container:
+        name: filebeat
+        state: restarted
+  
+  tasks:
+    - name: Установка nginx
+      apt:
+        name: nginx
+        state: present
+    
+    - name: Создание конфига nginx
+      copy:
+        content: |
+          events {
+              worker_connections 1024;
+          }
+          
+          http {
+              include /etc/nginx/mime.types;
+              
+              server {
+                  listen 80;
+                  server_name _;
+                  root /var/www/html;
+                  index index.html;
+                  
+                  location / {
+                      try_files $uri $uri/ =404;
+                  }
+              }
+          }
+        dest: /etc/nginx/nginx.conf
+        mode: '0644'
+      notify: restart nginx
+    
+    - name: Создание тестовой страницы
+      copy:
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head><title>Курсовой проект</title></head>
+          <body>
+            <h1>Сервер: {{ inventory_hostname }}</h1>
+            <p>Работает корректно</p>
+          </body>
+          </html>
+        dest: /var/www/html/index.html
+        mode: '0644'
+    
+    - name: Запуск nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Скачивание Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.6.0/node_exporter-1.6.0.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Распаковка Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Создание сервиса Node Exporter
+      copy:
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/node_exporter-1.6.0.linux-amd64/node_exporter
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/node_exporter.service
+        mode: '0644'
+      notify: restart node_exporter
+
+    - name: Запуск Node Exporter
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+
+    - name: Проверяем установлен ли Docker
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Если Docker не установлен - устанавливаем
+      apt:
+        name: docker.io
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Создание конфига Filebeat
+      copy:
+        content: |
+          filebeat.inputs:
+          - type: log
+            paths:
+              - /var/log/nginx/access.log
+            fields:
+              service: nginx
+          - type: log
+            paths:
+              - /var/log/nginx/error.log
+            fields:
+              service: nginx
+              level: error
+
+          output.elasticsearch:
+            hosts: ["192.168.30.11:9200"]
+        dest: /etc/filebeat.yml
+        mode: '0644'
+      notify: restart filebeat container
+
+    - name: Проверяем запущен ли Filebeat
+      docker_container_info:
+        name: filebeat
+      register: filebeat_status
+      ignore_errors: yes
+
+    - name: Запускаем Filebeat если не запущен
+      docker_container:
+        name: filebeat
+        image: docker.elastic.co/beats/filebeat:7.17.0
+        state: started
+        restart_policy: always
+        volumes:
+          - "/var/log/nginx:/var/log/nginx:ro"
+          - "/etc/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
+          - "filebeat-data:/usr/share/filebeat/data"
+      when: filebeat_status.container is not defined
+
+- name: Настройка Prometheus
+  hosts: prometheus
+  become: yes
+  
+  handlers:
+    - name: restart prometheus
+      systemd:
+        name: prometheus
+        state: restarted
+  
+  tasks:
+    - name: Скачивание Prometheus
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Распаковка Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Создание конфига Prometheus
+      copy:
+        content: |
+          global:
+            scrape_interval: 15s
+
+          scrape_configs:
+            - job_name: 'node'
+              static_configs:
+                - targets: ['192.168.30.23:9100', '192.168.40.11:9100']
+        dest: /opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+        mode: '0644'
+      notify: restart prometheus
+
+    - name: Создание сервиса Prometheus
+      copy:
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/opt/prometheus-2.47.0.linux-amd64/prometheus --config.file=/opt/prometheus-2.47.0.linux-amd64/prometheus.yml
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/prometheus.service
+        mode: '0644'
+      notify: restart prometheus
+
+    - name: Запуск Prometheus
+      systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+- name: Настройка Grafana
+  hosts: grafana
+  become: yes
+  
+  vars_files:
+    - grafana_vault.yml
+  
+  handlers:
+    - name: restart grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+  
+  tasks:
+    - name: Установка Grafana
+      apt:
+        name: grafana
+        state: present
+    
+    - name: Устанавливаем пароль из vault
+      replace:
+        path: /etc/grafana/grafana.ini
+        regexp: '^;admin_password = admin'
+        replace: 'admin_password = {{ grafana_password }}'
+      notify: restart grafana
+    
+    - name: Запуск Grafana
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+
+    - name: Ожидание запуска Grafana
+      wait_for:
+        port: 3000
+        timeout: 60
+
+- name: Настройка Elasticsearch
+  hosts: elasticsearch
+  become: yes
+  
+  handlers:
+    - name: restart elasticsearch container
+      docker_container:
+        name: elasticsearch
+        state: restarted
+  
+  tasks:
+    - name: Установка Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Создание конфига Elasticsearch
+      copy:
+        content: |
+          cluster.name: "mycourseproject-cluster"
+          node.name: "elasticsearch-node-1"
+          network.host: 0.0.0.0
+          http.port: 9200
+          discovery.type: single-node
+          xpack.security.enabled: false
+        dest: /etc/elasticsearch/elasticsearch.yml
+        mode: '0644'
+      notify: restart elasticsearch container
+
+    - name: Проверяем запущен ли Elasticsearch
+      docker_container_info:
+        name: elasticsearch
+      register: elasticsearch_status
+      ignore_errors: yes
+
+    - name: Запуск Elasticsearch в Docker
+      docker_container:
+        name: elasticsearch
+        image: elasticsearch:7.17.0
+        state: started
+        restart_policy: always
+        ports:
+          - "9200:9200"
+        volumes:
+          - "/etc/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro"
+        environment:
+          discovery.type: "single-node"
+      when: elasticsearch_status.container is not defined
+
+- name: Настройка Kibana
+  hosts: kibana
+  become: yes
+  
+  handlers:
+    - name: restart kibana container
+      docker_container:
+        name: kibana
+        state: restarted
+  
+  tasks:
+    - name: Установка Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Создание конфига Kibana
+      copy:
+        content: |
+          server.name: kibana
+          server.host: "0.0.0.0"
+          server.port: 5601
+          elasticsearch.hosts: ["http://192.168.30.11:9200"]
+          elasticsearch.requestTimeout: 90000
+          xpack.security.enabled: false
+        dest: /etc/kibana/kibana.yml
+        mode: '0644'
+      notify: restart kibana container
+
+    - name: Проверяем запущен ли Kibana
+      docker_container_info:
+        name: kibana
+      register: kibana_status
+      ignore_errors: yes
+
+    - name: Запуск Kibana в Docker
+      docker_container:
+        name: kibana
+        image: kibana:7.17.0
+        state: started
+        restart_policy: always
+        ports:
+          - "5601:5601"
+        volumes:
+          - "/etc/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro"
+      when: kibana_status.container is not defined
